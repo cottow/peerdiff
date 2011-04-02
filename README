@@ -1,0 +1,11 @@
+peerdiff README
+
+Peerdiff is a script that pulls info on your BGP peers from your router config and whois. It then compares the info from both sources, and shows you the differences. This is useful for bringing the whois info up-to-date with your real-world peerings.
+
+To install, just copy peerdiff.py to a convenient location.
+
+peerdiff.py needs access to the python sqlite3 module. It also relies on subprocess.Popen() to invoke whois.
+
+For usage info, see "peerdiff.py -h"
+
+

@@ -176,6 +176,20 @@ def readwhois():
             
     print "Imported %d peers from whois" % added
     
+def compare():
+    global conf,db
+    res = db['cursor'].execute('select router.asno, router.description, whois.accept, router.ip from router left join whois on whois.asno=router.asno')
+    for line in db['cursor'].fetchall():
+        in_whois = line[2]
+        if in_whois == None:
+            print "Peer AS%s(%s) is in router config (%s) but not in RPSL" % (line[0], line[1], line[3])
+
+    res = db['cursor'].execute('select whois.asno, whois.accept, router.description from whois left join router on whois.asno=router.asno;')
+    for line in db['cursor'].fetchall():
+        in_router = line[2]
+        if in_router == None:
+            print "Peer AS%s(%s) is in whois but not in router config" % (line[0], line[1])
+    
 def main():
     """
         main function
@@ -232,7 +246,7 @@ def main():
         readwhois()
     
     if command == 'all' or command == 'compare':
-        pass
+        compare()
         
     cleanup_db()
 
