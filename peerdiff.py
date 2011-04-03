@@ -92,7 +92,7 @@ def init_db():
 
     cursor = conn.cursor()
     try:
-        cursor.execute('CREATE TABLE router (asno int unique, ip varchar(255))')
+        cursor.execute('CREATE TABLE router (asno int unique, ip varchar(255), peergroup varchar(255))')
         cursor.execute('CREATE TABLE whois (asno int unique, accept varchar(255))')
     except sqlite3.OperationalError,e:
         cursor.execute('DELETE FROM router')
@@ -125,8 +125,7 @@ def readconfig(file):
         print "Could not open or read from %s" % file
         sys.exit(1)
 
-    r = re.compile(r'^\sneighbor\s+(\d.+)\s+remote-as\s+(\d+)')
-
+    r = re.compile(r'neighbor\s+(\d.+)\s+remote-as\s+(\d+)')
     added = 0
 
     for line in content.split('\n'):
@@ -134,9 +133,17 @@ def readconfig(file):
         if groups != []:
             asno = int(groups[0][1])
             ip = groups[0][0]
-            set = None
+            peergroup = ''
+            mre = r'^\s*neighbor\s+'+ip+r'\s+peer-group\s+(\S+)'
+            peer_re = re.compile(mre)
+            for line2 in content.split('\n'):
+                # find peer group
+                peer_m = peer_re.match(line2)
+                if peer_m != None:
+                    peergroup = peer_m.group(1)
+                    break
             try:
-                db['cursor'].execute( 'INSERT INTO router (asno,ip) VALUES (?, ?)', ( asno, ip))
+                db['cursor'].execute( 'INSERT INTO router (asno,ip, peergroup) VALUES (?, ?, ?)', ( asno, ip, peergroup))
                 db['conn'].commit()
 
             except sqlite3.IntegrityError:
@@ -221,9 +228,12 @@ def compare():
     global conf,db
     res = db['cursor'].execute('select router.asno, whois.accept, router.ip from router left join whois on whois.asno=router.asno')
     print "---- In router config, but not in WHOIS:"
+    diffs = 0
+
     for line in db['cursor'].fetchall():
         in_whois = line[1]
         if in_whois == None:
+            diffs = diffs + 1
             (asname,asset) = get_asname(line[0])
             print "remarks: ---------- %s ----------" % asname
             print "import: from AS%s accept ANY" % (line[0])
@@ -232,12 +242,17 @@ def compare():
     print "---- In WHOIS, but not in router config:"
     res = db['cursor'].execute('select whois.asno, whois.accept, router.ip from whois left join router on whois.asno=router.asno;')
     for line in db['cursor'].fetchall():
+        diffs=  diffs + 1
         in_router = line[2]
         if in_router == None:
             print "AS%s (accept %s)" % (line[0], line[1])
 
-    print ""
-    print " -- warning -- the above output should not be submitted directly to a RIR DB, but checked first for nonsens. For example, filter out your ibgp peers. Also, the AS-set that is accepted from each peer is set to ANY, please fix if you have stricter filtering." 
+    if diffs == 0:
+        print "No differences between router config and whois."
+    else:
+        print ""
+        print " -- warning -- the above output should not be submitted directly to a RIR DB, but checked first for nonsens. For example, filter out your ibgp peers. Also, the AS-set that is accepted from each peer is set to ANY, please fix if you have stricter filtering." 
+
 def main():
     """
         main function
