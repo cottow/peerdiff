@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """ peerdiff.py v0.1
 
-    This script compares the neighbors in your router config to the RPSL-specified peers in the whois info, and shows you the discrepancies between the two. 
+    This script compares the neighbors in your router config to the RPSL-specified peers in the whois info, and shows you the discrepancies between the two. It formats the entries that are not in WHOIS yet in RPSL, guessing the announced AS-set from the set announced to you by the peer (if it can be found).
+
     For help on usage, run with -h
     
     copyleft dunamis@wheel.sh, all rights reversed.
@@ -187,10 +188,11 @@ def readwhois():
             
     print "Imported %d peers from whois" % added
    
-def get_asname(asno):
+def get_asinfo(asno):
     """
         get a descriptive name for an asno
     """
+    global conf
     cmdline = "/usr/bin/env whois AS%s" % (asno)
     t = subprocess.Popen(cmdline, shell=True, stdout=subprocess.PIPE)
     whois = t.communicate()[0].split('\n')
@@ -199,7 +201,7 @@ def get_asname(asno):
     start_re = re.compile(r'^aut-num:\s+AS%s' % asno)   # start looking for imports after this line was matched
     import_re = re.compile(r'^import:\s+from\s+AS(\d+)(\s+accept\s+(.+))?') # a peer is described by this line
     descr_re = re.compile(r'^descr:\W+(\w.*)') # company name, probably
-    asset_re = re.compile(r'^export:\s+.+announce\s(\S+)')
+    asset_re = re.compile(r'^export:.*AS%s.*announce\s(\S+)' % conf['asno'])
     asset = ''
     asname = ''
 
@@ -219,6 +221,8 @@ def get_asname(asno):
             # matched as-set
             asset = asset_m.group(1)
 
+    if asset == '':
+        asset = 'ANY'
     return (asname,asset)
 
 def compare():
@@ -234,9 +238,9 @@ def compare():
         in_whois = line[1]
         if in_whois == None:
             diffs = diffs + 1
-            (asname,asset) = get_asname(line[0])
-            print "remarks: ---------- %s ----------" % asname
-            print "import: from AS%s accept ANY" % (line[0])
+            (asname,asset) = get_asinfo(line[0])
+            print "remarks: ----- %s " % asname
+            print "import: from AS%s accept %s" % (line[0], asset)
             print "export: to AS%s announce %s" % (line[0], conf['default_set'])
     print ""
     print "---- In WHOIS, but not in router config:"
@@ -251,7 +255,7 @@ def compare():
         print "No differences between router config and whois."
     else:
         print ""
-        print " -- warning -- the above output should not be submitted directly to a RIR DB, but checked first for nonsens. For example, filter out your ibgp peers. Also, the AS-set that is accepted from each peer is set to ANY, please fix if you have stricter filtering." 
+        print " -- warning -- the above output should not be submitted directly to a RIR DB, but checked first for nonsense. For example, filter out your ibgp peers. Also, the AS-set that is accepted from each peer is set to ANY if no export was found at the peer, please fix if you have stricter filtering." 
 
 def main():
     """
@@ -304,7 +308,6 @@ def main():
     if command == 'all' or command == 'update-router':
         files = conf['router_conf'].split(',')
         for f in files:
-            print f
             readconfig(f)
     
     if command == 'all' or command == 'update-whois':
