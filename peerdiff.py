@@ -52,17 +52,18 @@ def usage():
     print "This script updates an sqlite3 database containing peering info from config files and whois. The database can then be queried through the script to find discrepancies."
     print ""
     print "Usage: %s [-r router_config] [-d sqlite3_db] [-a asno] [-s whois_server] [-c] command" % sys.argv[0]
-    print "-r specifies the router config file to parse for peers (Cisco/quagga syntax). Comma-separated list for multiple files."
-    print "-d specifies the sqlite3 db file to use"
-    print "-a specifies the asno, for use in whois"
-    print "-s specifies the whois server to use"
-    print "-k keep the temporary db file. It is emptied upon run however."
-    print "-c prints the config"
-    print "-h prints this message"
+    print "-r\t specifies the router config file to parse for peers (Cisco/quagga syntax). Comma-separated list for multiple files."
+    print "-d\t specifies the sqlite3 db file to use"
+    print "-a\t specifies the asno, for use in whois"
+    print "-s\t specifies the whois server to use"
+    print "-k\t keep the temporary db file. It is emptied upon run however."
+    print "-c\t print the config and exit"
+    print "-h\t prints this message"
     print ""
     print "Command can be one of:"
-    print "\trouter\tupdate the db with peers from router config"
-    print "\twhois\tupdate the db with peers from whois db" 
+    print "\tupdate-router\tupdate the db with peers from router config"
+    print "\tupdate-whois\tupdate the db with peers from whois db"
+    print "\tcompare\tcompare the info in the db and print discrepancies"
     sys.exit(1)
     
 def print_config():
@@ -88,7 +89,7 @@ def init_db():
 
     cursor = conn.cursor()
     try:
-        cursor.execute('CREATE TABLE router (asno int, description varchar(255), ip varchar(255))')
+        cursor.execute('CREATE TABLE router (asno int, ip varchar(255))')
         cursor.execute('CREATE TABLE whois (asno int, accept varchar(255))')
     except sqlite3.OperationalError,e:
         cursor.execute('DELETE FROM router')
@@ -131,18 +132,7 @@ def readconfig(file):
             asno = int(groups[0][1])
             ip = groups[0][0]
             set = None
-            for line2 in content.split('\n'):
-                # search for the as-set
-                r2 = re.compile(r'^\sneighbor\s'+ip+r'\sdescription\s(.+)$')
-                group2 = r2.findall(line2)
-                if group2 != []:
-                    set = group2[0]
-        
-            if set == None:
-                print "Could not find description for AS %d at %s" % (asno, ip)
-                continue
-
-            db['cursor'].execute( 'INSERT INTO router (asno,description,ip) VALUES (?, ?, ?)', ( asno, set, ip))
+            db['cursor'].execute( 'INSERT INTO router (asno,ip) VALUES (?, ?)', ( asno, ip))
             added = added + 1
             db['conn'].commit()
 
@@ -170,6 +160,8 @@ def readwhois():
         if import_m != None:
             asno = int(import_m.group(1))
             accept = import_m.group(3)
+            if accept == None:
+                accept = 'Unknown'
             db['cursor'].execute('INSERT INTO whois (asno, accept) VALUES(?, ?)', (asno, accept))
             db['conn'].commit()
             added = added + 1
@@ -178,17 +170,19 @@ def readwhois():
     
 def compare():
     global conf,db
-    res = db['cursor'].execute('select router.asno, router.description, whois.accept, router.ip from router left join whois on whois.asno=router.asno')
+    res = db['cursor'].execute('select router.asno, whois.accept, router.ip from router left join whois on whois.asno=router.asno')
+    print "---- In router config, but not in WHOIS:"
     for line in db['cursor'].fetchall():
-        in_whois = line[2]
+        in_whois = line[1]
         if in_whois == None:
-            print "Peer AS%s(%s) is in router config (%s) but not in RPSL" % (line[0], line[1], line[3])
-
-    res = db['cursor'].execute('select whois.asno, whois.accept, router.description from whois left join router on whois.asno=router.asno;')
+            print "AS%s (%s)" % (line[0], line[2])
+    print ""
+    print "---- In WHOIS, but not in router config:"
+    res = db['cursor'].execute('select whois.asno, whois.accept, router.ip from whois left join router on whois.asno=router.asno;')
     for line in db['cursor'].fetchall():
         in_router = line[2]
         if in_router == None:
-            print "Peer AS%s(%s) is in whois but not in router config" % (line[0], line[1])
+            print "AS%s (accept %s)" % (line[0], line[1])
     
 def main():
     """
