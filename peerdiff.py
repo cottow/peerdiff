@@ -27,6 +27,8 @@ conf = {
     'whois_serv' : 'whois.ripe.net',
     # AS number to query """
     'asno' : '12345',
+    # default AS set to announce
+    'default_set' : 'AS-REPLACEME',
     # leave the database file in place after quit? """
     'keep_db' : False
 }
@@ -56,6 +58,7 @@ def usage():
     print "-d\t specifies the sqlite3 db file to use"
     print "-a\t specifies the asno, for use in whois"
     print "-s\t specifies the whois server to use"
+    print "-n\t specifies the AS-set to announce (used in pretty output only)"
     print "-k\t keep the temporary db file. It is emptied upon run however."
     print "-c\t print the config and exit"
     print "-h\t prints this message"
@@ -89,8 +92,8 @@ def init_db():
 
     cursor = conn.cursor()
     try:
-        cursor.execute('CREATE TABLE router (asno int, ip varchar(255))')
-        cursor.execute('CREATE TABLE whois (asno int, accept varchar(255))')
+        cursor.execute('CREATE TABLE router (asno int unique, ip varchar(255))')
+        cursor.execute('CREATE TABLE whois (asno int unique, accept varchar(255))')
     except sqlite3.OperationalError,e:
         cursor.execute('DELETE FROM router')
         cursor.execute('DELETE FROM whois')
@@ -132,10 +135,15 @@ def readconfig(file):
             asno = int(groups[0][1])
             ip = groups[0][0]
             set = None
-            db['cursor'].execute( 'INSERT INTO router (asno,ip) VALUES (?, ?)', ( asno, ip))
-            added = added + 1
-            db['conn'].commit()
+            try:
+                db['cursor'].execute( 'INSERT INTO router (asno,ip) VALUES (?, ?)', ( asno, ip))
+                db['conn'].commit()
 
+            except sqlite3.IntegrityError:
+                # already in db, fine.
+                pass
+            added = added + 1
+            
     print "Imported %d peers from %s" % (added, file)
 
 def readwhois():
@@ -162,20 +170,64 @@ def readwhois():
             accept = import_m.group(3)
             if accept == None:
                 accept = 'Unknown'
-            db['cursor'].execute('INSERT INTO whois (asno, accept) VALUES(?, ?)', (asno, accept))
-            db['conn'].commit()
+            try:
+                db['cursor'].execute('INSERT INTO whois (asno, accept) VALUES(?, ?)', (asno, accept))
+                db['conn'].commit()
+            except sqlite3.IntegrityError:
+                pass
+
             added = added + 1
             
     print "Imported %d peers from whois" % added
-    
+   
+def get_asname(asno):
+    """
+        get a descriptive name for an asno
+    """
+    cmdline = "/usr/bin/env whois AS%s" % (asno)
+    t = subprocess.Popen(cmdline, shell=True, stdout=subprocess.PIPE)
+    whois = t.communicate()[0].split('\n')
+
+    start = False
+    start_re = re.compile(r'^aut-num:\s+AS%s' % asno)   # start looking for imports after this line was matched
+    import_re = re.compile(r'^import:\s+from\s+AS(\d+)(\s+accept\s+(.+))?') # a peer is described by this line
+    descr_re = re.compile(r'^descr:\W+(\w.*)') # company name, probably
+    asset_re = re.compile(r'^export:\s+.+announce\s(\S+)')
+    asset = ''
+    asname = ''
+
+    for line in whois:
+        if start_re.match(line) != None:
+            start = True
+        if not start:
+            continue
+        if asset != '' and asname != '':
+            break
+        descr_m = descr_re.match(line)
+        asset_m = asset_re.match(line)
+        if descr_m != None and asname == '':
+            # matched company name
+            asname = descr_m.group(1)
+        if asset_m != None and asset == '':
+            # matched as-set
+            asset = asset_m.group(1)
+
+    return (asname,asset)
+
 def compare():
+    """
+        compare the whois and router peer sets and prints discrepancies
+    """
     global conf,db
     res = db['cursor'].execute('select router.asno, whois.accept, router.ip from router left join whois on whois.asno=router.asno')
     print "---- In router config, but not in WHOIS:"
     for line in db['cursor'].fetchall():
         in_whois = line[1]
         if in_whois == None:
-            print "AS%s (%s)" % (line[0], line[2])
+            (asname,asset) = get_asname(line[0])
+            print "remarks: ---------- %s ----------" % asname
+            print "import: from AS%s accept ANY" % (line[0])
+            print "export: to AS%s announce %s" % (line[0], conf['default_set'])
     print ""
     print "---- In WHOIS, but not in router config:"
     res = db['cursor'].execute('select whois.asno, whois.accept, router.ip from whois left join router on whois.asno=router.asno;')
@@ -183,7 +235,9 @@ def compare():
         in_router = line[2]
         if in_router == None:
             print "AS%s (accept %s)" % (line[0], line[1])
-    
+
+    print ""
+    print " -- warning -- the above output should not be submitted directly to a RIR DB, but checked first for nonsens. For example, filter out your ibgp peers. Also, the AS-set that is accepted from each peer is set to ANY, please fix if you have stricter filtering." 
 def main():
     """
         main function
@@ -191,7 +245,7 @@ def main():
     global conf,db,command
     
     try:
-        optlist, args = getopt.getopt( sys.argv[1:], 'd:r:ha:cks:')
+        optlist, args = getopt.getopt( sys.argv[1:], 'd:r:ha:n:cks:')
     except getopt.GetoptError, er:
         usage()
 
@@ -209,6 +263,8 @@ def main():
             conf['db_file'] = opt[1]
         elif opt[0] == '-r':
             conf['router_conf'] = opt[1]
+        elif opt[0] == '-n':
+            conf['default_set'] = opt[1]
         elif opt[0] == '-a':
             asno_re = re.compile(r'^[\w\d]+$')
             m = asno_re.match(opt[1])
